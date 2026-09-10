@@ -46,6 +46,11 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Signing — NEVER commit
+/android/key.properties
+*.jks
+*.keystore
+
 # Ephemeral / generated test artifacts
 *.db
 **/ephemeral/
