@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
+
+import 'package:flutter/foundation.dart';
 
 import '../../models/provider.dart';
 import '../../models/skill.dart';
@@ -66,9 +69,30 @@ class SkillResult {
   const SkillResult({required this.output, required this.passed, this.error});
 }
 
-/// Executes no-code skills (JSON graph of steps) with G.B gating on every
-/// provider call. Step outputs are interpolated into later prompt steps via
-/// {stepName} placeholders.
+class _CodeInput {
+  final String code;
+  final Map<String, dynamic> input;
+  const _CodeInput(this.code, this.input);
+}
+
+Future<Map<String, dynamic>> _executeCode(_CodeInput args) async {
+  final wrappedCode = '''
+import 'dart:convert';
+${args.code}
+
+void _entry(List<dynamic> args) {
+  final input = jsonDecode(args[0] as String) as Map<String, dynamic>;
+  final result = transform(input);
+  print(jsonEncode(result));
+}
+''';
+  final receivePort = ReceivePort();
+  final codeUri = Uri.dataFromString(wrappedCode, mimeType: 'application/dart');
+  await Isolate.spawnUri(codeUri, [], receivePort.sendPort);
+  final output = await receivePort.first;
+  return jsonDecode(output as String) as Map<String, dynamic>;
+}
+
 class SkillExecutor {
   final DatabaseService db;
   final SecurityGateway gateway;
@@ -87,9 +111,27 @@ class SkillExecutor {
 
   Future<SkillResult> runSpec(Skill skill, {String? input}) async {
     final sw = Stopwatch()..start();
-    final outputs = <String, String>{'input': input ?? '{}'};
-    final runs = <String>[];
     try {
+      if (skill.type == SkillType.code) {
+        final result = await _runCodePlugin(skill, input);
+        sw.stop();
+        final run = SkillRun(
+          skillId: skill.id,
+          status: 'pass',
+          input: input,
+          output: jsonEncode(result),
+          durationMs: sw.elapsedMilliseconds,
+          createdAt: DateTime.now(),
+        );
+        await db.insertSkillRun(run);
+        return SkillResult(
+          output: jsonEncode(result),
+          passed: true,
+        );
+      }
+
+      final outputs = <String, String>{'input': input ?? '{}'};
+      final runs = <String>[];
       final spec = SkillSpec.fromJson(skill.graphJson!);
       for (final step in spec.steps) {
         final out = await _runStep(step, outputs, spec);
@@ -97,14 +139,50 @@ class SkillExecutor {
         runs.add('${step.name}=${out.length}ch');
       }
       sw.stop();
-      if (sw.elapsedMilliseconds > 0) {}
+      final run = SkillRun(
+        skillId: skill.id,
+        status: 'pass',
+        input: input,
+        output: outputs.values.last,
+        durationMs: sw.elapsedMilliseconds,
+        createdAt: DateTime.now(),
+      );
+      await db.insertSkillRun(run);
       return SkillResult(
         output: outputs.values.last,
         passed: true,
       );
     } catch (e) {
+      sw.stop();
+      final run = SkillRun(
+        skillId: skill.id,
+        status: 'fail',
+        input: input,
+        error: '$e',
+        durationMs: sw.elapsedMilliseconds,
+        createdAt: DateTime.now(),
+      );
+      await db.insertSkillRun(run);
       return SkillResult(output: '', passed: false, error: '$e');
     }
+  }
+
+  Future<Map<String, dynamic>> _runCodePlugin(
+      Skill skill, String? input) async {
+    final code = skill.code ?? '';
+    final scan = await gateway.scanInbound(
+      text: code,
+      route: 'skill:${skill.id}:code',
+    );
+    if (scan.blocked) {
+      throw StateError('Blocked by G.B: ${scan.sanitized}');
+    }
+    final inputMap = (input != null && input.isNotEmpty)
+        ? (jsonDecode(input) as Map<String, dynamic>)
+        : <String, dynamic>{};
+    final result = await compute(_executeCode, _CodeInput(code, inputMap))
+        .timeout(const Duration(seconds: 30));
+    return result;
   }
 
   Future<String> _runStep(

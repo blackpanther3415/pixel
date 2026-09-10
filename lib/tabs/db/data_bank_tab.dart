@@ -54,9 +54,14 @@ class _DataBankTabState extends State<DataBankTab> {
       ].cast<Map<String, Object?>>();
     }
 
+    final unifiedResults = _query.trim().length >= 2
+        ? await db.unifiedSearch(_query)
+        : <Map<String, Object?>>[];
+
     return _DbSnapshot(
       docs: await db.listKbDocuments(),
       hits: await searchAll(),
+      unifiedResults: unifiedResults,
       usage: await db.usageStats(),
       providers: await db.listProviders(),
       settings: await db.getSettings(),
@@ -165,12 +170,55 @@ class _DataBankTabState extends State<DataBankTab> {
                     ),
                   )),
             const SectionHeader('Search results'),
-            if (d.hits.isEmpty)
+            if (d.unifiedResults.isEmpty && d.hits.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Text('Nothing matches.',
                     style: TextStyle(color: AppColors.textMid)),
               )
+            else if (d.unifiedResults.isNotEmpty)
+              ...d.unifiedResults.map((h) => Card(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(
+                          _iconForSource(h['source_type'] as String),
+                          size: 18,
+                          color: _colorForSource(h['source_type'] as String)),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(h['title']!.toString(),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13)),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _colorForSource(h['source_type'] as String)
+                                  .withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                                (h['source_type'] as String).toUpperCase(),
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    color: _colorForSource(
+                                        h['source_type'] as String))),
+                          ),
+                        ],
+                      ),
+                      subtitle: Text(
+                          '${h['snippet']}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11)),
+                    ),
+                  ))
             else
               ...d.hits.map((h) => Card(
                     margin: const EdgeInsets.only(bottom: 6),
@@ -229,11 +277,28 @@ class _DataBankTabState extends State<DataBankTab> {
         KbSourceType.text => Icons.notes,
         KbSourceType.rss => Icons.rss_feed,
       };
+
+  IconData _iconForSource(String s) => switch (s) {
+        'message' => Icons.chat_bubble_outline,
+        'skill' => Icons.extension,
+        'feature' => Icons.widgets_outlined,
+        'kb' => Icons.article_outlined,
+        _ => Icons.help_outline,
+      };
+
+  Color _colorForSource(String s) => switch (s) {
+        'message' => AppColors.accent,
+        'skill' => AppColors.good,
+        'feature' => Colors.amber,
+        'kb' => AppColors.primaryLight,
+        _ => AppColors.textMid,
+      };
 }
 
 class _DbSnapshot {
   final List<KbDocument> docs;
   final List<Map<String, Object?>> hits;
+  final List<Map<String, Object?>> unifiedResults;
   final Map<String, Object?> usage;
   final List<dynamic> providers;
   final AppSettings settings;
@@ -242,6 +307,7 @@ class _DbSnapshot {
   const _DbSnapshot({
     required this.docs,
     required this.hits,
+    required this.unifiedResults,
     required this.usage,
     required this.providers,
     required this.settings,

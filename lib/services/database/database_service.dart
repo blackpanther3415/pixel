@@ -22,6 +22,8 @@ class AppSettings {
   final bool voiceEnabled;
   final String defaultProviderId;
   final String defaultModel;
+  final bool vaultEnabled;
+  final String? vaultSalt; // base64
 
   const AppSettings({
     this.securityLevel = 'medium',
@@ -30,6 +32,8 @@ class AppSettings {
     this.voiceEnabled = true,
     this.defaultProviderId = '',
     this.defaultModel = '',
+    this.vaultEnabled = false,
+    this.vaultSalt,
   });
 
   AppSettings copyWith({
@@ -39,6 +43,8 @@ class AppSettings {
     bool? voiceEnabled,
     String? defaultProviderId,
     String? defaultModel,
+    bool? vaultEnabled,
+    String? vaultSalt,
   }) =>
       AppSettings(
         securityLevel: securityLevel ?? this.securityLevel,
@@ -47,6 +53,8 @@ class AppSettings {
         voiceEnabled: voiceEnabled ?? this.voiceEnabled,
         defaultProviderId: defaultProviderId ?? this.defaultProviderId,
         defaultModel: defaultModel ?? this.defaultModel,
+        vaultEnabled: vaultEnabled ?? this.vaultEnabled,
+        vaultSalt: vaultSalt ?? this.vaultSalt,
       );
 
   Map<String, Object?> toDb() => {
@@ -58,6 +66,8 @@ class AppSettings {
           'voice': voiceEnabled,
           'provider': defaultProviderId,
           'model': defaultModel,
+          'vault_enabled': vaultEnabled,
+          'vault_salt': vaultSalt,
         }),
       };
 
@@ -72,6 +82,8 @@ class AppSettings {
         voiceEnabled: (v['voice'] as bool?) ?? true,
         defaultProviderId: (v['provider'] as String?) ?? '',
         defaultModel: (v['model'] as String?) ?? '',
+        vaultEnabled: (v['vault_enabled'] as bool?) ?? false,
+        vaultSalt: v['vault_salt'] as String?,
       );
     } catch (_) {
       return const AppSettings();
@@ -704,6 +716,135 @@ class DatabaseService {
       'completionTokens': (r.first['completions'] as num?)?.toInt() ?? 0,
       'byProvider': tokens,
     };
+  }
+
+  Future<List<Map<String, Object?>>> unifiedSearch(String query, {int limit = 30}) async {
+    if (query.trim().length < 2) return [];
+    final safe = query.replaceAll('"', ' ').replaceAll("'", ' ');
+
+    Future<List<Map<String, Object?>>> searchKb() async {
+      try {
+        final rows = await db.rawQuery('''
+          SELECT kb_chunks.text, kb_documents.title AS doc_title
+          FROM kb_fts
+          JOIN kb_chunks ON kb_chunks.id = kb_fts.rowid
+          JOIN kb_documents ON kb_documents.id = kb_chunks.doc_id
+          WHERE kb_fts MATCH ?
+          ORDER BY rank
+          LIMIT ?
+        ''', ['"$safe"', limit]);
+        return [
+          for (final r in rows)
+            {
+              'title': r['doc_title'] ?? 'KB chunk',
+              'source_type': 'kb',
+              'text': r['text'] ?? '',
+              'snippet': (r['text'] as String? ?? '').length > 120
+                  ? '${(r['text'] as String).substring(0, 120)}…'
+                  : r['text'] ?? '',
+            },
+        ];
+      } catch (_) {
+        final rows = await db.rawQuery(
+            'SELECT text FROM kb_chunks WHERE text LIKE ? LIMIT ?',
+            ['%$query%', limit]);
+        return [
+          for (final r in rows)
+            {
+              'title': 'KB chunk',
+              'source_type': 'kb',
+              'text': r['text'] ?? '',
+              'snippet': (r['text'] as String? ?? '').length > 120
+                  ? '${(r['text'] as String).substring(0, 120)}…'
+                  : r['text'] ?? '',
+            },
+        ];
+      }
+    }
+
+    Future<List<Map<String, Object?>>> searchMessages() async {
+      try {
+        final rows = await db.rawQuery(
+            "SELECT content, role, created_at FROM messages WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
+            ['%$query%', limit]);
+        return [
+          for (final r in rows)
+            {
+              'title': '${r['role']} message',
+              'source_type': 'message',
+              'text': r['content'] ?? '',
+              'snippet': (r['content'] as String? ?? '').length > 120
+                  ? '${(r['content'] as String).substring(0, 120)}…'
+                  : r['content'] ?? '',
+            },
+        ];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    Future<List<Map<String, Object?>>> searchSkills() async {
+      try {
+        final rows = await db.rawQuery(
+            "SELECT name, description FROM skills WHERE name LIKE ? OR description LIKE ? LIMIT ?",
+            ['%$query%', '%$query%', limit]);
+        return [
+          for (final r in rows)
+            {
+              'title': r['name'] ?? 'Skill',
+              'source_type': 'skill',
+              'text': r['description'] ?? '',
+              'snippet': (r['description'] as String? ?? '').length > 120
+                  ? '${(r['description'] as String).substring(0, 120)}…'
+                  : r['description'] ?? '',
+            },
+        ];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    Future<List<Map<String, Object?>>> searchFeatures() async {
+      try {
+        final rows = await db.rawQuery(
+            "SELECT name, description FROM features WHERE name LIKE ? OR description LIKE ? LIMIT ?",
+            ['%$query%', '%$query%', limit]);
+        return [
+          for (final r in rows)
+            {
+              'title': r['name'] ?? 'Feature',
+              'source_type': 'feature',
+              'text': r['description'] ?? '',
+              'snippet': (r['description'] as String? ?? '').length > 120
+                  ? '${(r['description'] as String).substring(0, 120)}…'
+                  : r['description'] ?? '',
+            },
+        ];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    final results = await Future.wait([
+      searchKb(),
+      searchMessages(),
+      searchSkills(),
+      searchFeatures(),
+    ]);
+
+    final all = <Map<String, Object?>>[];
+    for (final batch in results) {
+      all.addAll(batch);
+    }
+
+    const priority = {'message': 0, 'skill': 1, 'feature': 2, 'kb': 3};
+    all.sort((a, b) {
+      final pa = priority[a['source_type']] ?? 4;
+      final pb = priority[b['source_type']] ?? 4;
+      return pa.compareTo(pb);
+    });
+
+    return all.length > limit ? all.sublist(0, limit) : all;
   }
 
   Future<void> close() async => _db?.close();

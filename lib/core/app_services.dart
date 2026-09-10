@@ -13,12 +13,14 @@ import '../services/sandbox/sandbox_service.dart';
 import '../services/security/security_engine.dart';
 import '../services/security/security_gateway.dart';
 import '../services/skills/skill_executor.dart';
+import '../services/vault/vault_service.dart';
 
 /// The composition root. Constructed once at app start; passed down via
 /// ChangeNotifierProvider so every tab shares one set of live services.
 class AppServices {
   final DatabaseService db;
   final SecurityGateway gateway;
+  final VaultService vault;
   late final ChatService chat;
   late final KbService kb;
   late final SkillExecutor skills;
@@ -28,7 +30,11 @@ class AppServices {
   late final PlanBuildService builder;
   late final LlmLabService llm;
 
-  AppServices({required this.db, required this.gateway}) {
+  AppServices({
+    required this.db,
+    required this.gateway,
+    VaultService? vault,
+  }) : vault = vault ?? VaultService() {
     chat = ChatService(
       db: db,
       gateway: gateway,
@@ -52,6 +58,8 @@ class AppServices {
   Future<void> init() async {
     await db.init();
     final settings = await db.getSettings();
+    // Restore vault state from persisted settings
+    vault.loadSalt(settings.vaultSalt);
     gateway.loadLevel(settings);
     await chat.loadFromSettings(settings);
   }
