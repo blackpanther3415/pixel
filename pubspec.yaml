@@ -1,0 +1,37 @@
+name: pixel
+description: Pixel - AI Harness Dashboard. Local-first, security-gated, graph-customizable.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  dio: ^5.5.0
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.3
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  provider: ^6.1.2
+  crypto: ^3.0.3
+  cryptography: ^2.7.0
+  shared_preferences: ^2.2.3
+  intl: ^0.19.0
+  uuid: ^4.4.2
+  url_launcher: ^6.3.0
+  archive: ^3.6.1
+  fl_chart: ^0.68.0
+  html: ^0.15.4
+  xml: ^6.5.0
+  file_picker: ^8.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
