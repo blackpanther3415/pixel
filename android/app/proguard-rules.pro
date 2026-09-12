@@ -7,6 +7,10 @@
 -keep class io.flutter.plugins.**  { *; }
 -keep class io.flutter.embedding.** { *; }
 
+# Play Store deferred components are optional (not used by this app)
+-dontwarn com.google.android.play.core.splitinstall.**
+-dontwarn com.google.android.play.core.tasks.**
+
 # Dio HTTP client
 -keep class com.squareup.okhttp3.** { *; }
 -keep class okio.** { *; }
